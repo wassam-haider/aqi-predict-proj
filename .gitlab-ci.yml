@@ -1,0 +1,49 @@
+stages:
+  - setup
+  - fetch_data
+  - train
+
+variables:
+  # Ensure pip doesn't cache and uses unbuffered output
+  PIP_NO_CACHE_DIR: "1"
+  PYTHONUNBUFFERED: "1"
+
+before_script:
+  # Install dependencies using pip (you can switch to conda if environment.yml is used)
+  - python -m pip install --upgrade pip
+  - pip install -r requirements.txt
+
+setup_env:
+  stage: setup
+  script:
+    - echo "✅ Setup stage complete"
+  tags:
+    - python
+
+fetch_current_data:
+  stage: fetch_data
+  script:
+    - echo "Fetching current AQI & weather data..."
+    - python data_acquisition/fetch_current.py
+  only:
+    - main   # run only on main branch
+  tags:
+    - python
+  dependencies: []
+
+train_models:
+  stage: train
+  script:
+    - echo "Training models and logging to DagsHub MLflow..."
+    - python models/train.py
+  only:
+    - main
+  tags:
+    - python
+  dependencies:
+    - fetch_current_data
+  artifacts:
+    paths:
+      - model_files/
+      - *.joblib
+    expire_in: 1 week
