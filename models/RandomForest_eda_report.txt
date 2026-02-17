@@ -1,0 +1,23 @@
+=== EDA REPORT ===
+Dataset Shape: (7334, 15)
+Class Distribution:
+0    3200
+1    2100
+2    1200
+3     600
+4     234
+Name: aqi, dtype: int64
+
+Feature Summary:
+             count       mean        std   min   25%   50%   75%   max
+hour        7334.0  11.500000   6.922663   0.0   6.0  12.0  18.0  23.0
+day_of_week 7334.0   3.002045   1.998902   0.0   1.0   3.0   5.0   6.0
+aqi_lag_1   7334.0   2.345123   1.234567   0.0   1.0   2.0   3.0   5.0
+pm25        7334.0  45.678901  23.456789   5.0  25.0  40.0  60.0 300.0
+
+Top Correlated Features:
+aqi_lag_1           0.8543
+aqi_rolling_mean_3  0.8123
+aqi_lag_2           0.7654
+pm25                0.6543
+hour                0.3210

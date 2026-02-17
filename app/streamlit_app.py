@@ -22,89 +22,66 @@ st.set_page_config(
 )
 
 # ---------------- CONFIG & AUTH ---------------- #
+# Simplified local/remote logic:
+# If reports exist locally, use them. If not, try MLflow.
+# If MLflow credentials exist, configure it for potential artifact tracking.
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
-DAGSHUB_USERNAME = os.getenv("DAGSHUB_USERNAME")
-DAGSHUB_TOKEN = os.getenv("DAGSHUB_TOKEN")
-DAGSHUB_REPO = os.getenv("DAGSHUB_REPO")
-
-# Configure MLflow
-if DAGSHUB_USERNAME and DAGSHUB_TOKEN and DAGSHUB_REPO:
-    os.environ["MLFLOW_TRACKING_USERNAME"] = DAGSHUB_USERNAME
-    os.environ["MLFLOW_TRACKING_PASSWORD"] = DAGSHUB_TOKEN
-    tracking_uri = f"https://dagshub.com/{DAGSHUB_USERNAME}/{DAGSHUB_REPO}.mlflow"
-    mlflow.set_tracking_uri(tracking_uri)
-else:
-    st.error("MLflow credentials missing. Please check .env")
-
-# ---------------- CONSTANTS ---------------- #
-# Fallback hardcoded placeholders if download fails
-HARDCODED_EDA = """
-=== EDA REPORT (Placeholder) ===
-Dataset Shape: (N, M)
-Feature Summary:
-Please run extract_stats.py locally or ensure MLflow artifacts are logged.
-"""
-HARDCODED_SHAP = """
-=== SHAP FEATURE IMPORTANCE (Placeholder) ===
-Feature    Importance
-aqi_lag_1  0.50
-hour       0.20
-...
-"""
-
+# Color Scheme
 CLASS_COLORS = {
     "Good": "green", "Fair": "lightgreen", "Moderate": "orange", 
     "Poor": "red", "Very Poor": "darkred"
 }
-CLASS_MAPPING = {0: "Good", 1: "Fair", 2: "Moderate", 3: "Poor", 4: "Very Poor"}
+# Extended mapping to catch 0-5 range safely
+CLASS_MAPPING = {
+    0: "Good", 1: "Fair", 2: "Moderate", 3: "Poor", 4: "Very Poor", 
+    5: "Very Poor" # Catch-all for high index
+}
 
 # ---------------- CACHED FUNCTIONS ---------------- #
 
 @st.cache_resource
 def get_model_and_reports():
-    """Load model from MLflow and fetch EDA/SHAP reports from artifacts."""
-    model_name = "aqi_best_model"
-    model_version = "2" # Or fetch latest dynamically
-    model_uri = f"models:/{model_name}/{model_version}"
+    """Load model and fetch reports from local 'models/' directory (GitHub) or MLflow fallback."""
+    
+    # Paths relative to this script
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    MODELS_DIR = os.path.join(BASE_DIR, "..", "models")
     
     model = None
-    eda_text = HARDCODED_EDA
-    shap_text = HARDCODED_SHAP
+    eda_text = "EDA Report not available."
+    shap_text = "SHAP Summary not available."
     
+    # 1. Try loading reports from local filesystem
     try:
-        # Load Model
-        model = mlflow.sklearn.load_model(model_uri)
+        rf_eda_path = os.path.join(MODELS_DIR, "RandomForest_eda_report.txt")
+        rf_shap_path = os.path.join(MODELS_DIR, "RandomForest_shap_summary.txt")
         
-        # Get Run ID to fetch artifacts
-        client = MlflowClient()
-        # Search for the version to get run_id
-        # Note: mlflow.sklearn.load_model might not expose run_id easily on object
-        # So we search versions
-        versions = client.search_model_versions(f"name='{model_name}'")
-        run_id = next((v.run_id for v in versions if v.version == model_version), None)
-        
-        if run_id:
-            # List artifacts
-            artifacts = client.list_artifacts(run_id)
+        if os.path.exists(rf_eda_path):
+            with open(rf_eda_path, "r") as f: eda_text = f.read()
             
-            # Find reports (flexible matching)
-            eda_file = next((x.path for x in artifacts if "eda_report.txt" in x.path), None)
-            shap_file = next((x.path for x in artifacts if "shap_summary.txt" in x.path), None)
+        if os.path.exists(rf_shap_path):
+            with open(rf_shap_path, "r") as f: shap_text = f.read()
             
-            # Download and Read
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                if eda_file:
-                    local_eda = client.download_artifacts(run_id, eda_file, dst_path=tmp_dir)
-                    with open(local_eda, "r") as f: eda_text = f.read()
-                    
-                if shap_file:
-                    local_shap = client.download_artifacts(run_id, shap_file, dst_path=tmp_dir)
-                    with open(local_shap, "r") as f: shap_text = f.read()
-                    
     except Exception as e:
-        st.error(f"Error loading model/reports from MLflow: {e}")
-        
+        st.warning(f"Could not read local reports: {e}")
+
+    # 2. Load Model (Try MLflow first for production freshness, fallback local)
+    try:
+        # Check standard MLflow loading
+        model_uri = "models:/aqi_best_model/2"
+        model = mlflow.sklearn.load_model(model_uri)
+    except Exception:
+        # Fallback to local model file if MLflow fails/unconfigured
+        try:
+            local_model_path = os.path.join(BASE_DIR, "..", "model_files", "RandomForest_model.joblib")
+            if os.path.exists(local_model_path):
+                model = joblib.load(local_model_path)
+            else:
+                st.error("Model file not found locally or in MLflow.")
+        except Exception as e:
+            st.error(f"Error loading model: {e}")
+
     return model, eda_text, shap_text
 
 @st.cache_resource

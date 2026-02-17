@@ -1,0 +1,10 @@
+=== SHAP FEATURE IMPORTANCE ===
+Feature             Importance
+aqi_lag_1           0.450
+aqi_rolling_mean_3  0.250
+aqi_lag_2           0.120
+pm25                0.080
+aqi_rolling_std_3   0.050
+hour                0.030
+day_of_month        0.010
+month               0.010
