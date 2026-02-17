@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import mlflow
 import mlflow.sklearn
+import shap
 from dotenv import load_dotenv
 from datetime import datetime
 from pymongo import MongoClient, errors
@@ -16,8 +17,6 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     f1_score,
-    classification_report,
-    confusion_matrix
 )
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.linear_model import LogisticRegression
@@ -25,7 +24,6 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.feature_selection import SelectKBest, f_classif
 
 import matplotlib.pyplot as plt
-import seaborn as sns
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -54,7 +52,12 @@ mlflow.set_experiment("aqi_prediction_experiment")
 def get_mongo_client(uri):
     for attempt in range(5):
         try:
-            client = MongoClient(uri, tls=True, tlsCAFile=certifi.where(), serverSelectionTimeoutMS=20000)
+            client = MongoClient(
+                uri,
+                tls=True,
+                tlsCAFile=certifi.where(),
+                serverSelectionTimeoutMS=20000
+            )
             client.admin.command("ping")
             print("✅ Connected to MongoDB")
             return client
@@ -68,9 +71,9 @@ client = get_mongo_client(MONGO_URI)
 db = client["aqi_db"]
 collection = db["aqi_data"]
 
-# ---------------- FETCH DATA ---------------- #
 print("Fetching data...")
 df = pd.DataFrame(list(collection.find({}, {"_id": 0})))
+
 if df.empty:
     raise ValueError("No data found in MongoDB")
 
@@ -109,7 +112,7 @@ def create_features(df):
 
 df = create_features(df)
 
-# ---------------- DEFINE FEATURES ---------------- #
+# ---------------- FEATURES ---------------- #
 exclude_cols = ['aqi','timestamp']
 feature_cols = [col for col in df.columns if col not in exclude_cols]
 
@@ -127,7 +130,7 @@ y_train = y[df['timestamp'] < split_date]
 y_test = y[df['timestamp'] >= split_date]
 
 
-# ---------------- SCALE + FEATURE SELECTION ---------------- #
+# ---------------- SCALE + SELECT ---------------- #
 scaler = StandardScaler()
 X_train_scaled = scaler.fit_transform(X_train)
 X_test_scaled = scaler.transform(X_test)
@@ -139,7 +142,7 @@ X_test_selected = selector.transform(X_test_scaled)
 selected_features = [feature_cols[i] for i in selector.get_support(indices=True)]
 
 
-# ---------------- HYPERPARAMETER TUNING ---------------- #
+# ---------------- HYPERPARAM TUNING ---------------- #
 param_grid = {
     'n_estimators':[50,100],
     'max_depth':[5,10],
@@ -158,32 +161,27 @@ rf_grid.fit(X_train_selected, y_train)
 
 
 # ---------------- MODELS ---------------- #
-# ---------------- MODELS ---------------- #
 models = {
     "RandomForest": RandomForestClassifier(**rf_grid.best_params_, random_state=42),
     "GradientBoosting": GradientBoostingClassifier(
         n_estimators=100,
-        max_depth=4,
-        min_samples_split=10,
-        min_samples_leaf=5,
         learning_rate=0.05,
-        subsample=0.8,
+        max_depth=4,
         random_state=42
     ),
     "LogisticRegression": LogisticRegression(
         C=0.1,
-        penalty='l2',
-        solver='lbfgs',       # ✅ multiclass safe
-        multi_class='auto',   # ✅ automatically uses multinomial
         max_iter=2000,
+        multi_class='auto',
+        solver='lbfgs',
         random_state=42
     )
 }
 
 
-
-# ---------------- TRAIN + LOG EVERYTHING ---------------- #
+# ---------------- TRAIN + LOG ---------------- #
 for name, model in models.items():
+
     print(f"\n🚀 Training {name}...")
 
     with mlflow.start_run(run_name=name):
@@ -191,20 +189,17 @@ for name, model in models.items():
         model.fit(X_train_selected, y_train)
         y_pred = model.predict(X_test_selected)
 
-        # Metrics
         acc = accuracy_score(y_test, y_pred)
         precision = precision_score(y_test, y_pred, average="macro")
         recall = recall_score(y_test, y_pred, average="macro")
         f1 = f1_score(y_test, y_pred, average="macro")
 
-        mlflow.log_param("model_name", name)
-        mlflow.log_param("num_features", len(selected_features))
-
         mlflow.log_metric("accuracy", acc)
         mlflow.log_metric("precision_macro", precision)
         mlflow.log_metric("recall_macro", recall)
         mlflow.log_metric("f1_macro", f1)
-        #save preproccessing artifacts
+
+        # -------- SAVE PREPROCESSING -------- #
         joblib.dump(scaler, "scaler.joblib")
         joblib.dump(selector, "selector.joblib")
         joblib.dump(feature_cols, "feature_columns.joblib")
@@ -215,27 +210,73 @@ for name, model in models.items():
         mlflow.log_artifact("feature_columns.joblib")
         mlflow.log_artifact("selected_features.joblib")
 
-        # Classification Report
-        # report = classification_report(y_test, y_pred)
-        # report_file = f"{name}_classification_report.txt"
-        # with open(report_file, "w") as f:
-        #     f.write(report)
-        # mlflow.log_artifact(report_file)
+        # -------- EDA REPORT -------- #
+        eda_text = []
+        eda_text.append("=== EDA REPORT ===\n")
+        eda_text.append(f"Dataset Shape: {df.shape}\n")
+        eda_text.append("\nClass Distribution:\n")
+        eda_text.append(y.value_counts().to_string())
+        eda_text.append("\n\nFeature Summary:\n")
+        eda_text.append(df.describe().to_string())
 
-        # # Confusion Matrix
-        # cm = confusion_matrix(y_test, y_pred)
-        # plt.figure()
-        # sns.heatmap(cm, annot=True, fmt="d")
-        # plt.title(f"{name} Confusion Matrix")
-        # plt.xlabel("Predicted")
-        # plt.ylabel("Actual")
+        corr = df[selected_features + ['aqi']].corr()['aqi'].abs().sort_values(ascending=False)
+        eda_text.append("\n\nTop Correlated Features:\n")
+        eda_text.append(corr.head(10).to_string())
 
-        # cm_file = f"{name}_confusion_matrix.png"
-        # plt.savefig(cm_file)
-        # mlflow.log_artifact(cm_file)
-        # plt.close()
+        eda_file = f"{name}_eda_report.txt"
+        with open(eda_file, "w") as f:
+            f.write("\n".join(eda_text))
 
-        # Log model to registry
+        mlflow.log_artifact(eda_file)
+
+        # -------- SHAP ANALYSIS -------- #
+        try:
+            if name in ["RandomForest", "GradientBoosting"]:
+                explainer = shap.TreeExplainer(model)
+                shap_values = explainer.shap_values(X_test_selected)
+
+                if isinstance(shap_values, list):
+                    shap_array = np.mean(np.abs(np.array(shap_values)), axis=(0,1))
+                else:
+                    shap_array = np.mean(np.abs(shap_values), axis=0)
+
+            else:
+                explainer = shap.LinearExplainer(model, X_train_selected)
+                shap_values = explainer.shap_values(X_test_selected)
+
+                if isinstance(shap_values, list):
+                    shap_array = np.mean(np.abs(np.array(shap_values)), axis=(0,1))
+                else:
+                    shap_array = np.mean(np.abs(shap_values), axis=0)
+
+            shap_importance = pd.Series(shap_array, index=selected_features)
+            shap_importance = shap_importance.sort_values(ascending=False)
+
+            shap_text = ["=== SHAP FEATURE IMPORTANCE ===\n"]
+            shap_text.append(shap_importance.head(15).to_string())
+
+            shap_file = f"{name}_shap_summary.txt"
+            with open(shap_file, "w") as f:
+                f.write("\n".join(shap_text))
+
+            mlflow.log_artifact(shap_file)
+
+            # SHAP Plot
+            plt.figure()
+            shap_importance.head(15).plot(kind='barh')
+            plt.title(f"{name} SHAP Feature Importance")
+            plt.gca().invert_yaxis()
+
+            shap_plot_file = f"{name}_shap_plot.png"
+            plt.savefig(shap_plot_file, bbox_inches='tight')
+            plt.close()
+
+            mlflow.log_artifact(shap_plot_file)
+
+        except Exception as e:
+            print("SHAP failed:", e)
+
+        # -------- LOG MODEL -------- #
         mlflow.sklearn.log_model(
             sk_model=model,
             artifact_path="model",
@@ -244,14 +285,7 @@ for name, model in models.items():
 
         print(f"✅ {name}")
         print(f"Accuracy: {acc:.4f}")
-        print(f"Precision: {precision:.4f}")
-        print(f"Recall: {recall:.4f}")
         print(f"F1 Score: {f1:.4f}")
 
-
 client.close()
-print("\n🎯 Training complete. All models logged to MLflow + Registry.")
-
-
-
-
+print("\n🎯 Training complete. All models logged with EDA + SHAP.")
