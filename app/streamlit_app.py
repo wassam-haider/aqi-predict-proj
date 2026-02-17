@@ -370,14 +370,9 @@ def render_reports():
     # Hardcoded EDA Report Data
     eda_dataset_shape = (522, 37)
     
-    # class_distribution = pd.DataFrame({
-    #     "AQI Class": [0, 1, 2, 3],
-    #     "Label": ["Good", "Fair", "Moderate", "Poor"],
-    #     "Count": [43, 181, 175, 123]
-    # })
-        class_distribution = pd.DataFrame({
+    class_distribution = pd.DataFrame({
         "AQI Class": [1, 2, 3, 4, 5],
-        "Label": ["Good", "Fair", "Moderate", "Poor", "Very Poor"],
+        "Label": ["Good", "Fair", "Moderate", "Poor", "very-poor"],
         "Count": [0, 181, 175, 123, 43]
     })
     
