@@ -12,10 +12,12 @@ from pymongo import MongoClient, errors
 from dotenv import load_dotenv
 from io import StringIO
 
+import requests
+
 # ---------------- PAGE CONFIG ---------------- #
 st.set_page_config(
-    page_title="AQI Professional Dashboard",
-    page_icon="🌍",
+    page_title="Karachi AQI Dashboard",
+    page_icon="�🇰",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -23,6 +25,11 @@ st.set_page_config(
 # ---------------- CONFIG & AUTH ---------------- #
 load_dotenv()
 MONGO_URI = os.getenv("MONGO_URI")
+OPENWEATHER_API_KEY = os.getenv("OPENWEATHER_API_KEY")
+
+# Karachi Coordinates
+LAT = 24.8607
+LON = 67.0011
 
 # Color Scheme
 CLASS_COLORS = {
@@ -210,20 +217,98 @@ def create_features(df):
         df['nox_ratio'] = df['no2'] / (df['o3'] + 0.001)
     return df
 
+@st.cache_data(ttl=900)
+def fetch_live_aqi():
+    """Fetch real-time AQI from OpenWeather API."""
+    if not OPENWEATHER_API_KEY: return None
+    try:
+        url = f"http://api.openweathermap.org/data/2.5/air_pollution?lat={LAT}&lon={LON}&appid={OPENWEATHER_API_KEY}"
+        resp = requests.get(url, timeout=5).json()
+        if "list" in resp and resp["list"]:
+            data = resp["list"][0]
+            return {
+                "aqi": data["main"]["aqi"],
+                "components": data["components"],
+                "timestamp": datetime.utcnow()
+            }
+    except Exception as e:
+        print(f"Live API Error: {e}")
+    return None
+
 # ---------------- UI RENDERERS ---------------- #
 def render_overview(df):
-    st.markdown("## 📊 Overview")
-    if df.empty:
-        st.info("No Data.")
+    
+    # Custom Header
+    st.markdown("""
+        <style>
+        .main-header {
+            background: linear-gradient(90deg, #1e3c72 0%, #2a5298 100%);
+            padding: 2rem;
+            border-radius: 10px;
+            color: white;
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        .metric-card {
+            background-color: #f0f2f6;
+            padding: 1rem;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        </style>
+        <div class="main-header">
+            <h1>🇵🇰 Karachi Air Quality Dashboard</h1>
+            <p>Real-time Monitoring & Future Predictions</p>
+        </div>
+    """, unsafe_allow_html=True)
+    
+    live_data = fetch_live_aqi()
+    
+    # Determine what to show
+    if live_data:
+        current_aqi = live_data["aqi"]
+        # Karachi is UTC+5
+        last_updated = live_data["timestamp"] + timedelta(hours=5)
+        source = "🟢 Live API (OpenWeather)"
+        # Extra details from live
+        pm25 = live_data["components"]["pm2_5"]
+        pm10 = live_data["components"]["pm10"]
+    elif not df.empty:
+        last = df.iloc[-1]
+        current_aqi = int(last['aqi'])
+        # Taking DB timestamp as is (assuming it was collected in approximate local time or we blindly show it)
+        last_updated = last['timestamp']
+        source = "🟠 Database (Historical)"
+        # Try to find PM2.5 if in columns
+        pm25 = last.get("pm25", "N/A")
+        pm10 = last.get("pm10", "N/A")
+    else:
+        st.error("No data available.")
         return
-    last = df.iloc[-1]
-    aqi = int(last['aqi'])
-    label = CLASS_MAPPING.get(aqi if aqi < 5 else aqi-1, "Unknown")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Records", len(df))
-    c2.metric("Latest AQI", aqi)
-    c3.metric("Class", label)
-    c4.metric("Updated", last['timestamp'].strftime('%Y-%m-%d %H:%M'))
+
+    label = CLASS_MAPPING.get(current_aqi if current_aqi < 5 else current_aqi-1, "Unknown")
+    color = CLASS_COLORS.get(label, "grey")
+
+    # Metrics Row
+    c1, c2, c3 = st.columns(3)
+    
+    with c1:
+        st.markdown(f"### Current AQI")
+        st.markdown(f"<h1 style='color: {color}; font-size: 3rem;'>{current_aqi}</h1>", unsafe_allow_html=True)
+        st.caption(f"Status: **{label}**")
+        
+    with c2:
+        st.markdown("### Pollutants")
+        p25_val = f"{pm25:.1f}" if isinstance(pm25, (int, float)) else pm25
+        p10_val = f"{pm10:.1f}" if isinstance(pm10, (int, float)) else pm10
+        st.metric("PM2.5", p25_val, "µg/m³")
+        st.metric("PM10", p10_val, "µg/m³")
+        
+    with c3:
+        st.markdown("### Info")
+        st.metric("Source", source)
+        st.metric("Last Updated", last_updated.strftime('%H:%M %p, %d %b %Y'))
 
 def render_historical(df):
     st.markdown("---")

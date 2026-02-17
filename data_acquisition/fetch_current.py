@@ -9,8 +9,8 @@ load_dotenv()
 API_KEY = os.getenv("OPENWEATHER_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 
-LAT = 28.6139   
-LON = 77.2090
+LAT = 24.8607   
+LON = 67.0011
 
 client = MongoClient(MONGO_URI)
 db = client["aqi_db"]
@@ -18,40 +18,54 @@ collection = db["aqi_data"]
 
 def fetch_data():
     air_url = f"http://api.openweathermap.org/data/2.5/air_pollution?lat={LAT}&lon={LON}&appid={API_KEY}"
-    weather_url = f"http://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={API_KEY}&units=metric"
+    weather_url = f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={API_KEY}&units=metric"
 
-    air_response = requests.get(air_url).json()
-    weather_response = requests.get(weather_url).json()
+    try:
+        air_response = requests.get(air_url).json()
+        weather_response = requests.get(weather_url).json()
 
-    air = air_response["list"][0]
-    weather = weather_response
+        if "list" not in air_response or not air_response["list"]:
+            print("Error fetching air quality data")
+            return None
 
-    document = {
-        "timestamp": datetime.utcnow(),
+        if "main" not in weather_response:
+             print("Error fetching weather data")
+             return None
 
-        # Pollutants
-        "pm25": air["components"]["pm2_5"],
-        "pm10": air["components"]["pm10"],
-        "no2": air["components"]["no2"],
-        "o3": air["components"]["o3"],
-        "so2": air["components"]["so2"],
-        "co": air["components"]["co"],
+        air = air_response["list"][0]
+        weather = weather_response
 
-        # Weather
-        "temperature": weather["main"]["temp"],
-        "humidity": weather["main"]["humidity"],
-        "pressure": weather["main"]["pressure"],
-        "wind_speed": weather["wind"]["speed"],
-        "wind_deg": weather["wind"]["deg"],
-        "clouds": weather["clouds"]["all"],
-        "visibility": weather.get("visibility", None),
+        document = {
+            "timestamp": datetime.utcnow(),
 
-        # AQI class from API (1–5)
-        "aqi": air["main"]["aqi"]
-    }
+            # Pollutants
+            "pm25": air["components"]["pm2_5"],
+            "pm10": air["components"]["pm10"],
+            "no2": air["components"]["no2"],
+            "o3": air["components"]["o3"],
+            "so2": air["components"]["so2"],
+            "co": air["components"]["co"],
 
-    collection.insert_one(document)
-    print("Data inserted successfully")
+            # Weather
+            "temperature": weather["main"]["temp"],
+            "humidity": weather["main"]["humidity"],
+            "pressure": weather["main"]["pressure"],
+            "wind_speed": weather["wind"]["speed"],
+            "wind_deg": weather["wind"]["deg"],
+            "clouds": weather["clouds"]["all"],
+            "visibility": weather.get("visibility", None),
+
+            # AQI class from API (1–5)
+            "aqi": air["main"]["aqi"]
+        }
+
+        collection.insert_one(document)
+        print("Data inserted successfully")
+        return document
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        return None
 
 if __name__ == "__main__":
     fetch_data()
