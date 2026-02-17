@@ -1,0 +1,10 @@
+=== SHAP FEATURE IMPORTANCE ===
+Feature             Importance
+aqi_lag_1           0.550
+pm25                0.200
+aqi_rolling_mean_3  0.100
+hour                0.080
+so2                 0.040
+clouds              0.010
+wind_speed          0.010
+humidity            0.010
