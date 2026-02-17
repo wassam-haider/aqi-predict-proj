@@ -37,36 +37,73 @@ CLASS_MAPPING = {
 # ---------------- REPORT PARSERS ---------------- #
 def parse_eda_report(text):
     sections = {}
-    try:
-        parts = text.split("\n\n")
-        for part in parts:
-            if "Class Distribution" in part:
-                lines = [l.strip() for l in part.split("\n")[2:] if l.strip()]
-                data = []
-                for line in lines:
-                    p = line.split()
-                    if len(p) >= 2: data.append({"Class": p[0], "Count": int(p[1])})
-                sections["class_dist"] = pd.DataFrame(data)
-                
-            elif "Feature Summary" in part:
-                # Attempt to parse wide table
-                try:
-                    lines = part.split("\n")[2:]
-                    table_str = "\n".join(lines)
-                    # Handle multiple spaces as separator
-                    sections["feature_summary"] = pd.read_csv(StringIO(table_str), sep=r"\s+", engine='python')
-                except:
-                    sections["feature_summary"] = None
+    lines = text.split("\n")
+    current_section = None
+    buffer = []
 
-            elif "Top Correlated Features" in part:
-                lines = [l.strip() for l in part.split("\n")[2:] if l.strip()]
-                data = []
-                for line in lines:
-                    p = line.split()
-                    if len(p) >= 2: data.append({"Feature": p[0], "Correlation": float(p[1])})
-                sections["correlation"] = pd.DataFrame(data)
-    except Exception as e:
-        print(f"Error parsing EDA: {e}")
+    def process_buffer(section, buf):
+        if not buf or not section: return
+        
+        if section == "class_dist":
+            data = []
+            for line in buf:
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        # try picking the last valid int
+                        val = int(parts[-1])
+                        cls = " ".join(parts[:-1])
+                        if cls.lower() not in ["aqi", "class"]:
+                            data.append({"Class": cls, "Count": val})
+                    except: pass
+            if data: sections["class_dist"] = pd.DataFrame(data)
+
+        elif section == "feature_summary":
+            try:
+                table_str = "\n".join(buf)
+                # Filter out lines that look like headers if dragged in
+                sections["feature_summary"] = pd.read_csv(StringIO(table_str), sep=r"\s+", engine='python')
+            except: pass
+
+        elif section == "correlation":
+            data = []
+            for line in buf:
+                parts = line.split()
+                if len(parts) >= 2:
+                    try:
+                        val = float(parts[-1])
+                        feat = " ".join(parts[:-1])
+                        if feat.lower() not in ["feature", "correlation"]:
+                             data.append({"Feature": feat, "Correlation": val})
+                    except: pass
+            if data: sections["correlation"] = pd.DataFrame(data)
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped: continue
+        
+        # State transitions
+        if "Class Distribution" in line:
+            process_buffer(current_section, buffer)
+            current_section = "class_dist"
+            buffer = []
+        elif "Feature Summary" in line:
+            process_buffer(current_section, buffer)
+            current_section = "feature_summary"
+            buffer = []
+        elif "Top Correlated Features" in line:
+            process_buffer(current_section, buffer)
+            current_section = "correlation"
+            buffer = []
+        elif "===" in line:
+            continue
+        else:
+            if current_section:
+                buffer.append(line)
+                
+    # Flush last buffer
+    process_buffer(current_section, buffer)
+    
     return sections
 
 def parse_shap_report(text):
